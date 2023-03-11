@@ -8,6 +8,7 @@ import {
   provablePure,
   Struct,
   Circuit,
+  MerkleWitness,
 } from 'snarkyjs';
 
 import { 
@@ -17,8 +18,33 @@ import {
 await isReady;
 
 class ProofchainStruct extends Struct({
-  messages: DynamicArray(Field, 100)
+  //
+  rootCommit: Field,
+
+  // users >> we actually do want dynamic users?
+  // users >> generate secret keys
+
+  // check signerKey when appending a message
+  // we don't want to check all signerKeys ideally O(n)
+
+  // We can calculate 
+
+
+  // userCommits: Set<Field>, // need to be able to check my commit
+
+  userCommits: MerkleWitness,
+
+  messagesCommit: MerkleWitness
 }) {}
+
+
+class Messages extends Struct({
+
+}) {
+  // append
+
+  // hash
+}
 
 
 const Proofchain = Experimental.ZkProgram({
@@ -40,23 +66,50 @@ const Proofchain = Experimental.ZkProgram({
     addMessage: {
       privateInputs: [],
 
-      method(rollup: ProofchainStruct, previous: Messages, next: Messages, earlierProof) {
+      // prove message + previous
+      // can pass in proof
 
+      // pass in signerKey membership proof (!!)
+      method(rollup: ProofchainStruct, previous: ProofchainStruct, next: Message, signerKey: SignerMembership) {
+        // need to prove signerKey is valid
 
+        // need to prove previous and current rollups are valid
 
+        // need to prove step from previous >> current is valid
+        // - single message
+
+        // need to prove Message is valid
+        // - 
       }
     }
   }
 });
 
 
+const SignerMembership = Experimental.ZkProgram({
+  publicInput: provablePure(ProofchainStruct)
+})
 
+
+// What is a MerkleWitness?
+
+// https://docs.minaprotocol.com/zkapps/advanced-snarkyjs/merkle-tree
+
+
+
+// const SignerMembership << another ZkProgram to determine signer membership. This can get passed into proof
+
+
+// const MessageAppend << ZkProgram to show a particular message was appended to message chain
+
+// const StateChangeProof?
+
+
+
+// The MerkleTree is external to the proof
 // https://github.com/o1-labs/snarkyjs/blob/main/src/examples/zkapps/merkle_tree/merkle_zkapp.ts#L78
+
 // https://github.com/Raunaque97/RepeatingLifeZK/blob/main/src/gameOfLife.ts
-
-
-
-
 
 
 
