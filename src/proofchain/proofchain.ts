@@ -9,6 +9,7 @@ import {
   Struct,
   Circuit,
   MerkleWitness,
+  BaseMerkleWitness,
   MerkleTree,
   Poseidon,
 } from 'snarkyjs';
@@ -17,8 +18,36 @@ await isReady;
 
 class ProofchainStruct extends Struct({
   rootCommit: Field,
+  signersCommit: Field,
   messagesCommit: Field
 }) {}
+
+
+const MERKLE_HEIGHT = 12;
+class MyMerkleWitness extends MerkleWitness(MERKLE_HEIGHT) {}
+
+class SignerStruct extends Struct({
+  signerKey: Field,
+  ringCommit: Field
+}) {}
+
+const SignerProgram = Experimental.ZkProgram({
+  publicInput: provablePure(SignerStruct),
+
+  methods: {
+    init: {
+      privateInputs: [MyMerkleWitness],
+
+      method(publicInput: SignerStruct, witness: MyMerkleWitness) {
+        publicInput.ringCommit.assertEquals(
+          witness.calculateRoot(publicInput.signerKey)
+        )
+      }
+    }
+  }
+})
+
+const SignerProof = Experimental.ZkProgram.Proof(SignerProgram)
 
 const Proofchain = Experimental.ZkProgram({
   publicInput: provablePure(ProofchainStruct),
@@ -26,8 +55,10 @@ const Proofchain = Experimental.ZkProgram({
   methods: {
     init: {
       privateInputs: [Field],
+
       method(publicInput: ProofchainStruct, rootKey: Field) {
         publicInput.messagesCommit.assertEquals(Field(0));
+        publicInput.signersCommit.assertEquals(Field(0));
         publicInput.rootCommit.assertEquals(Poseidon.hash([
           rootKey
         ]));
@@ -35,46 +66,95 @@ const Proofchain = Experimental.ZkProgram({
     },
 
     // addRootMessage
-    addUser: {
-      privateInputs: [SelfProof, Field],
 
-      method(publicInput: ProofchainStruct, self: SelfProof<ProofchainStruct>, signerKey: Field) {
+    setUsers: {
+      privateInputs: [SelfProof, Field, Field],
+
+      method(publicInput: ProofchainStruct, self: SelfProof<ProofchainStruct>, rootKey: Field, signersCommit: Field) {
         self.verify();
 
+        publicInput.messagesCommit.assertEquals(Field(0))
+        
+        publicInput.rootCommit.assertEquals(Poseidon.hash([
+          rootKey
+        ]));
         publicInput.rootCommit.assertEquals(self.publicInput.rootCommit)
         publicInput.messagesCommit.assertEquals(self.publicInput.messagesCommit)
+
+        publicInput.signersCommit.assertEquals(signersCommit)
       }
     },
 
     addMessage: {
-      privateInputs: [SelfProof, Field],
+      privateInputs: [SelfProof, Field, SignerProof],
 
       // proof.append is the only one that needs to be secured
       // proof.verify(message state) << commitment is secure, we do other operations outside
 
       // To append, we can use a blockchain style hashing mechanism      
-      method(publicInput: ProofchainStruct, self: SelfProof<ProofchainStruct>, message: Field) {
+      method(publicInput: ProofchainStruct, self: SelfProof<ProofchainStruct>, message: Field, signerProof: Proof<SignerStruct>) {
         self.verify();
+        signerProof.verify();
 
         // assert self and publicInput are equal in all other ways
         publicInput.rootCommit.assertEquals(self.publicInput.rootCommit)
+        publicInput.signersCommit.assertEquals(self.publicInput.signersCommit)
 
+        // valid signer
+        publicInput.signersCommit.assertEquals(signerProof.publicInput.ringCommit)
+
+        // message increment >> move this out
         publicInput.messagesCommit.assertEquals(
           Poseidon.hash([self.publicInput.messagesCommit, message]),
           'Message commit invalid'
         )
       }
-    }
+    },
+
+    // addMessage: {
+    //   privateInputs: [SelfProof, Field],
+
+    //   // proof.append is the only one that needs to be secured
+    //   // proof.verify(message state) << commitment is secure, we do other operations outside
+
+    //   // To append, we can use a blockchain style hashing mechanism      
+    //   method(publicInput: ProofchainStruct, self: SelfProof<ProofchainStruct>, message: Field) {
+    //     self.verify();
+
+    //     // assert self and publicInput are equal in all other ways
+    //     publicInput.rootCommit.assertEquals(self.publicInput.rootCommit)
+    //     publicInput.signersCommit.assertEquals(self.publicInput.signersCommit)
+
+    //     // message increment >> move this out
+    //     publicInput.messagesCommit.assertEquals(
+    //       Poseidon.hash([self.publicInput.messagesCommit, message]),
+    //       'Message commit invalid'
+    //     )
+    //   }
+    // }    
   }
 });
 
+const signerKey1 = Field(123)
+const signerKey2 = Field(124)
 
-// Full on encryption (!!)
-// https://docs.minaprotocol.com/zkapps/snarkyjs-reference/modules/Encryption
-// Do we need to do this in the proof?
-// https://github.com/search?q=Encryption+snarkyjs&type=code
+const tree = new MerkleTree(MERKLE_HEIGHT);
+tree.setLeaf(0n, signerKey1)
+tree.setLeaf(1n, signerKey2)
 
+const signersCommit = tree.getRoot();
+
+const signer1Witness = tree.getWitness(0n);
+const signer1WitnessC = new MyMerkleWitness(signer1Witness)
+
+const signer2Witness = tree.getWitness(1n);
+const signer2WitnessC = new MyMerkleWitness(signer2Witness)
+
+/**
+ * Initialize
+ */
 console.time('compiling 1');
+await SignerProgram.compile();
 await Proofchain.compile();
 console.timeEnd('compiling 1');
 
@@ -87,29 +167,60 @@ console.time('proving base case...');
 const proof = await Proofchain.init({
   rootCommit,
   messagesCommit: Field(0),
+  signersCommit: Field(0),
 }, rootKey);
 console.timeEnd('proving base case...');
 
+console.time('setting users...');
+const proof1 = await Proofchain.setUsers({
+  rootCommit,
+  messagesCommit: Field(0),
+  signersCommit,
+}, proof, rootKey, signersCommit);
+console.timeEnd('setting users...');
+
+/**
+ * Messages
+ */
+const message1 = Field(12345)
+const message2 = Field(23456)
+
 const commit1 = Poseidon.hash([
   Field(0),
-  Field(12345),
+  message1,
 ]);
 
-console.time('adding message 12345');
+console.time('signing message 1');
+const signer1Proof = await SignerProgram.init({
+  signerKey: signerKey1,
+  ringCommit: signersCommit,
+}, signer1WitnessC)
+console.timeEnd('signing message 1');
+
+console.time('adding message 1');
 const proof2 = await Proofchain.addMessage({
   rootCommit,
-  messagesCommit: commit1
-}, proof, Field(12345))
-console.timeEnd('adding message 12345');
+  messagesCommit: commit1,
+  signersCommit,
+}, proof1, message1, signer1Proof)
+console.timeEnd('adding message 1');
 
 const commit2 = Poseidon.hash([
   commit1,
-  Field(23456),
+  message2,
 ]);
 
-console.time('adding message 23456');
+console.time('signing message 2');
+const signer2Proof = await SignerProgram.init({
+  signerKey: signerKey2,
+  ringCommit: signersCommit,
+}, signer2WitnessC)
+console.timeEnd('signing message 2');
+
+console.time('adding message 2');
 const proof3 = await Proofchain.addMessage({
   rootCommit,
-  messagesCommit: commit2
-}, proof2, Field(23456));
-console.timeEnd('adding message 23456');
+  messagesCommit: commit2,
+  signersCommit,
+}, proof2, message2, signer2Proof);
+console.timeEnd('adding message 2');
