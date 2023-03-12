@@ -9,184 +9,107 @@ import {
   Struct,
   Circuit,
   MerkleWitness,
+  MerkleTree,
+  Poseidon,
 } from 'snarkyjs';
-
-import { 
-  DynamicArray
-} from './dynamicArray.js' // we use JS?
 
 await isReady;
 
 class ProofchainStruct extends Struct({
-  //
   rootCommit: Field,
-
-  // users >> we actually do want dynamic users?
-  // users >> generate secret keys
-
-  // check signerKey when appending a message
-  // we don't want to check all signerKeys ideally O(n)
-
-  // We can calculate 
-
-
-  // userCommits: Set<Field>, // need to be able to check my commit
-
-  userCommits: MerkleWitness,
-
-  messagesCommit: MerkleWitness
+  messagesCommit: Field
 }) {}
-
-
-class Messages extends Struct({
-
-}) {
-  // append
-
-  // hash
-}
-
 
 const Proofchain = Experimental.ZkProgram({
   publicInput: provablePure(ProofchainStruct),
 
   methods: {
     init: {
-      privateInputs: [],
-      method(publicInput: ProofchainStruct) {
-        publicInput.messages.length
-        // assert commitment
-        // publicInput.a.assertEquals(Field(0))
-        // publicInput.b.assertEquals(Field(0))
+      privateInputs: [Field],
+      method(publicInput: ProofchainStruct, rootKey: Field) {
+        publicInput.messagesCommit.assertEquals(Field(0));
+        publicInput.rootCommit.assertEquals(Poseidon.hash([
+          rootKey
+        ]));
       },
     },
 
-    // addUser
+    // addRootMessage
+    addUser: {
+      privateInputs: [SelfProof, Field],
+
+      method(publicInput: ProofchainStruct, self: SelfProof<ProofchainStruct>, signerKey: Field) {
+        self.verify();
+
+        publicInput.rootCommit.assertEquals(self.publicInput.rootCommit)
+        publicInput.messagesCommit.assertEquals(self.publicInput.messagesCommit)
+      }
+    },
 
     addMessage: {
-      privateInputs: [],
+      privateInputs: [SelfProof, Field],
 
-      // prove message + previous
-      // can pass in proof
+      // proof.append is the only one that needs to be secured
+      // proof.verify(message state) << commitment is secure, we do other operations outside
 
-      // pass in signerKey membership proof (!!)
-      method(rollup: ProofchainStruct, previous: ProofchainStruct, next: Message, signerKey: SignerMembership) {
-        // need to prove signerKey is valid
+      // To append, we can use a blockchain style hashing mechanism      
+      method(publicInput: ProofchainStruct, self: SelfProof<ProofchainStruct>, message: Field) {
+        self.verify();
 
-        // need to prove previous and current rollups are valid
+        // assert self and publicInput are equal in all other ways
+        publicInput.rootCommit.assertEquals(self.publicInput.rootCommit)
 
-        // need to prove step from previous >> current is valid
-        // - single message
-
-        // need to prove Message is valid
-        // - 
+        publicInput.messagesCommit.assertEquals(
+          Poseidon.hash([self.publicInput.messagesCommit, message]),
+          'Message commit invalid'
+        )
       }
     }
   }
 });
 
 
-const SignerMembership = Experimental.ZkProgram({
-  publicInput: provablePure(ProofchainStruct)
-})
-
-
-// What is a MerkleWitness?
-
-// https://docs.minaprotocol.com/zkapps/advanced-snarkyjs/merkle-tree
-
-
-
-// const SignerMembership << another ZkProgram to determine signer membership. This can get passed into proof
-
-
-// const MessageAppend << ZkProgram to show a particular message was appended to message chain
-
-// const StateChangeProof?
-
-
-
-// The MerkleTree is external to the proof
-// https://github.com/o1-labs/snarkyjs/blob/main/src/examples/zkapps/merkle_tree/merkle_zkapp.ts#L78
-
-// https://github.com/Raunaque97/RepeatingLifeZK/blob/main/src/gameOfLife.ts
-
-
-
-type CompositeInput = {
-  a: Field,
-  b: Field,
-}
-
-const CompositeInput = provablePure(
-  { a: Field, b: Field },
-  { customObjectKeys: ['a', 'b'] }
-);
-
-const Program1 = Experimental.ZkProgram({
-  publicInput: CompositeInput,
-
-  methods: {
-    baseCase: {
-      privateInputs: [],
-
-      method(publicInput: CompositeInput) {
-        publicInput.a.assertEquals(Field(0))
-        publicInput.b.assertEquals(Field(0))
-      },
-    },
-  },
-});
-
-
-const Program1Proof = Experimental.ZkProgram.Proof(Program1);
-
-const Program2 = Experimental.ZkProgram({
-  publicInput: Field,
-
-  methods: {
-    baseCase: {
-      privateInputs: [],
-
-      method(publicInput: Field) {
-        publicInput.assertEquals(Field(1))
-      },
-    },
-
-    inductiveCase: {
-      privateInputs: [Program1Proof],
-
-      // and can we add a self proof???
-      method(publicInput: Field, anotherProof: Proof<CompositeInput>) {
-        // anotherProof.verify();
-        // anotherProof.publicInput.a.add(1).assertEquals(publicInput);
-        // anotherProof.publicInput.b.add(1).assertEquals(publicInput);
-      },
-    },
-  },
-});
+// Full on encryption (!!)
+// https://docs.minaprotocol.com/zkapps/snarkyjs-reference/modules/Encryption
+// Do we need to do this in the proof?
+// https://github.com/search?q=Encryption+snarkyjs&type=code
 
 console.time('compiling 1');
-await Program1.compile();
+await Proofchain.compile();
 console.timeEnd('compiling 1');
 
-
-console.time('compiling 2');
-const { verificationKey } = await Program2.compile();
-console.timeEnd('compiling 2');
-console.log('verification key', verificationKey.slice(0, 10) + '..');
+const rootKey = Field(12345)
+const rootCommit = Poseidon.hash([
+  rootKey
+])
 
 console.time('proving base case...');
-const proof = await Program1.baseCase({
-  a: Field(0),
-  b: Field(0)
-});
+const proof = await Proofchain.init({
+  rootCommit,
+  messagesCommit: Field(0),
+}, rootKey);
 console.timeEnd('proving base case...');
 
-console.time('proving step 1...');
-const proof2 = await Program2.inductiveCase(Field(1), proof);
-console.timeEnd('proving step 1...');
+const commit1 = Poseidon.hash([
+  Field(0),
+  Field(12345),
+]);
 
-console.log('verify...');
-const ok = await verify(proof2, verificationKey);
-console.log('ok?', ok);
+console.time('adding message 12345');
+const proof2 = await Proofchain.addMessage({
+  rootCommit,
+  messagesCommit: commit1
+}, proof, Field(12345))
+console.timeEnd('adding message 12345');
+
+const commit2 = Poseidon.hash([
+  commit1,
+  Field(23456),
+]);
+
+console.time('adding message 23456');
+const proof3 = await Proofchain.addMessage({
+  rootCommit,
+  messagesCommit: commit2
+}, proof2, Field(23456));
+console.timeEnd('adding message 23456');
