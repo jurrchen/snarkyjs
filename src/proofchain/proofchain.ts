@@ -45,9 +45,7 @@ const SignerProgram = Experimental.ZkProgram({
       }
     }
   }
-})
-
-const SignerProof = Experimental.ZkProgram.Proof(SignerProgram)
+});
 
 const Proofchain = Experimental.ZkProgram({
   publicInput: provablePure(ProofchainStruct),
@@ -86,22 +84,24 @@ const Proofchain = Experimental.ZkProgram({
     },
 
     addMessage: {
-      privateInputs: [SelfProof, Field, SignerProof],
+      privateInputs: [SelfProof, Field, Field, MyMerkleWitness],
 
       // proof.append is the only one that needs to be secured
       // proof.verify(message state) << commitment is secure, we do other operations outside
 
       // To append, we can use a blockchain style hashing mechanism      
-      method(publicInput: ProofchainStruct, self: SelfProof<ProofchainStruct>, message: Field, signerProof: Proof<SignerStruct>) {
+      method(publicInput: ProofchainStruct, self: SelfProof<ProofchainStruct>, message: Field, signerKey: Field, witness: MyMerkleWitness) {
         self.verify();
-        signerProof.verify();
 
         // assert self and publicInput are equal in all other ways
         publicInput.rootCommit.assertEquals(self.publicInput.rootCommit)
         publicInput.signersCommit.assertEquals(self.publicInput.signersCommit)
 
-        // valid signer
-        publicInput.signersCommit.assertEquals(signerProof.publicInput.ringCommit)
+        // valid signer (was thinking of breaking this off, but actually less efficient)
+        publicInput.signersCommit.assertEquals(
+          witness.calculateRoot(signerKey),
+          'signerKey invalid'
+        )
 
         // message increment >> move this out
         publicInput.messagesCommit.assertEquals(
@@ -109,29 +109,7 @@ const Proofchain = Experimental.ZkProgram({
           'Message commit invalid'
         )
       }
-    },
-
-    // addMessage: {
-    //   privateInputs: [SelfProof, Field],
-
-    //   // proof.append is the only one that needs to be secured
-    //   // proof.verify(message state) << commitment is secure, we do other operations outside
-
-    //   // To append, we can use a blockchain style hashing mechanism      
-    //   method(publicInput: ProofchainStruct, self: SelfProof<ProofchainStruct>, message: Field) {
-    //     self.verify();
-
-    //     // assert self and publicInput are equal in all other ways
-    //     publicInput.rootCommit.assertEquals(self.publicInput.rootCommit)
-    //     publicInput.signersCommit.assertEquals(self.publicInput.signersCommit)
-
-    //     // message increment >> move this out
-    //     publicInput.messagesCommit.assertEquals(
-    //       Poseidon.hash([self.publicInput.messagesCommit, message]),
-    //       'Message commit invalid'
-    //     )
-    //   }
-    // }    
+    }
   }
 });
 
@@ -154,7 +132,7 @@ const signer2WitnessC = new MyMerkleWitness(signer2Witness)
  * Initialize
  */
 console.time('compiling 1');
-await SignerProgram.compile();
+// await SignerProgram.compile();
 await Proofchain.compile();
 console.timeEnd('compiling 1');
 
@@ -190,19 +168,12 @@ const commit1 = Poseidon.hash([
   message1,
 ]);
 
-console.time('signing message 1');
-const signer1Proof = await SignerProgram.init({
-  signerKey: signerKey1,
-  ringCommit: signersCommit,
-}, signer1WitnessC)
-console.timeEnd('signing message 1');
-
 console.time('adding message 1');
 const proof2 = await Proofchain.addMessage({
   rootCommit,
   messagesCommit: commit1,
   signersCommit,
-}, proof1, message1, signer1Proof)
+}, proof1, message1, signerKey1, signer1WitnessC)
 console.timeEnd('adding message 1');
 
 const commit2 = Poseidon.hash([
@@ -210,17 +181,10 @@ const commit2 = Poseidon.hash([
   message2,
 ]);
 
-console.time('signing message 2');
-const signer2Proof = await SignerProgram.init({
-  signerKey: signerKey2,
-  ringCommit: signersCommit,
-}, signer2WitnessC)
-console.timeEnd('signing message 2');
-
 console.time('adding message 2');
 const proof3 = await Proofchain.addMessage({
   rootCommit,
   messagesCommit: commit2,
   signersCommit,
-}, proof2, message2, signer2Proof);
+}, proof2, message2, signerKey2, signer2WitnessC);
 console.timeEnd('adding message 2');
