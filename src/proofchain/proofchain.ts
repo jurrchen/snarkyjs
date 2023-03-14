@@ -9,7 +9,6 @@ import {
   Struct,
   Circuit,
   MerkleWitness,
-  BaseMerkleWitness,
   MerkleTree,
   Poseidon,
 } from 'snarkyjs';
